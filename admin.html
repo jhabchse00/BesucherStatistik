@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Admin Dashboard — Büchsenstadel</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{--bg:#f5f7fb;--card:#fff;--muted:#7b8594;--accent:#3b82f6}
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0;background:var(--bg);color:#222}
+  .wrap{max-width:1100px;margin:28px auto;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  h1{font-size:20px;margin:0}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+  .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}
+  .big{grid-column:span 2}
+  .stat{font-size:28px;font-weight:600}
+  .label{color:var(--muted);font-size:13px;margin-top:6px}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  canvas{width:100%!important;height:260px!important}
+  footer{margin-top:18px;color:var(--muted);font-size:13px;text-align:right}
+  @media (max-width:900px){.grid{grid-template-columns:repeat(1,1fr)}.big{grid-column:span 1}.charts{grid-template-columns:1fr}}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #e5e7eb;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin-left:8px;vertical-align:middle}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Büchsenstadel — Admin Dashboard</h1>
+      <div id="lastUpdate" style="color:var(--muted);font-size:13px">loading…</div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">Total Submissions</div>
+        <div id="total" class="stat">—</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Letzte Einträge</div>
+        <div id="recentList" style="margin-top:8px;color:#333;font-size:14px">—</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Auto-refresh</div>
+        <div style="margin-top:8px">
+          <select id="refreshInterval">
+            <option value="0">Aus</option>
+            <option value="15">15s</option>
+            <option value="30" selected>30s</option>
+            <option value="60">60s</option>
+          </select>
+          <span style="margin-left:12px;color:var(--muted);font-size:13px">Last fetch: <span id="fetchStatus">—</span></span>
+        </div>
+      </div>
+
+      <div class="card big">
+        <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+          <div>
+            <div class="label">Geschlecht</div>
+            <div style="font-weight:600;margin-top:6px">Verteilung nach Geschlecht</div>
+          </div>
+          <div style="font-size:13px;color:var(--muted)">Live</div>
+        </div>
+        <div class="charts" style="margin-top:12px">
+          <canvas id="genderChart"></canvas>
+          <canvas id="ageChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">Migrationshintergrund</div>
+        <canvas id="migChart" style="margin-top:10px"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="label">Zeitreihe</div>
+        <canvas id="timeChart" style="margin-top:10px"></canvas>
+      </div>
+    </div>
+
+    <footer>
+      <span id="ownerNote">Datenquelle: Google Sheets</span>
+    </footer>
+  </div>
+
+<script>
+/* ====== CONFIG: replace this with your CSV URL ======
+   Recommended: publish the sheet to web as CSV OR use the export?format=csv URL
+   Example (replace ID & gid): 
+   https://docs.google.com/spreadsheets/d/1k3-fZrVej9zJQrHNRRCXguPGuBSqwc7XuaBHZXyP_bk/export?format=csv&gid=726839817
+*/
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRaFKAQwcvl7c7dT1HI_aj7THVW9DKYLGXPtvn_WR7uYEAzxyUjH3DVmTFxZefhWF5FcXoHnK-XJim5/pub?gid=1664273841&single=true&output=csv';
+
+/* ====== Simple CSV parser (handles quoted fields) ====== */
+function parseCSV(text){
+  const rows = [];
+  let i = 0, cur = '', row = [], inQuotes = false;
+  while(i < text.length){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch === '"'){
+        if(text[i+1] === '"'){ cur += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      } else { cur += ch; i++; continue; }
+    }
+    if(ch === '"'){ inQuotes = true; i++; continue; }
+    if(ch === ','){ row.push(cur); cur=''; i++; continue; }
+    if(ch === '\\r'){ i++; continue; }
+    if(ch === '\\n'){ row.push(cur); rows.push(row); row=[]; cur=''; i++; continue; }
+    cur += ch; i++;
+  }
+  // last cell
+  if(cur !== '' || inQuotes || row.length) row.push(cur);
+  if(row.length) rows.push(row);
+  return rows;
+}
+
+/* ====== Utilities to find column indexes by fuzzy header name ====== */
+function findColIndex(headers, candidates){
+  const low = headers.map(h => (h||'').toLowerCase().trim());
+  for(const c of candidates){
+    const ii = low.indexOf(c.toLowerCase());
+    if(ii !== -1) return ii;
+  }
+  // try contains
+  for(const c of candidates){
+    for(let j=0;j<low.length;j++){
+      if(low[j].includes(c.toLowerCase())) return j;
+    }
+  }
+  return -1;
+}
+
+/* ====== Chart helpers ====== */
+let genderChart, ageChart, migChart, timeChart;
+function makeCharts(){
+  const genderCtx = document.getElementById('genderChart').getContext('2d');
+  genderChart = new Chart(genderCtx, { type:'doughnut', data:{labels:['Männlich','Weiblich','Divers','Unbekannt'], datasets:[{data:[0,0,0,0]}]}, options:{plugins:{legend:{position:'bottom'}}}});
+
+  const ageCtx = document.getElementById('ageChart').getContext('2d');
+  ageChart = new Chart(ageCtx, { type:'bar', data:{labels:['10–14','14–18','18–27','27+','Unbekannt'], datasets:[{label:'Anzahl',data:[0,0,0,0,0],backgroundColor:[]}] ,}, options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+
+  const migCtx = document.getElementById('migChart').getContext('2d');
+  migChart = new Chart(migCtx, { type:'pie', data:{labels:['Ja','Nein','Unbekannt'], datasets:[{data:[0,0,0]}]}, options:{plugins:{legend:{position:'bottom'}}}});
+
+  const timeCtx = document.getElementById('timeChart').getContext('2d');
+  timeChart = new Chart(timeCtx, { type:'line', data:{labels:[],datasets:[{label:'Submissions',data:[],fill:false,tension:0.2}]}, options:{scales:{x:{display:true},y:{beginAtZero:true}}}});
+}
+
+/* ====== Main data fetch + compute ====== */
+async function fetchAndUpdate(){
+  try{
+    document.getElementById('fetchStatus').innerText = 'fetching';
+    document.getElementById('lastUpdate').innerText = 'fetching…';
+    const t0 = Date.now();
+    const res = await fetch(CSV_URL, {cache: 'no-store'});
+    if(!res.ok) throw new Error('Fetch failed: '+res.status);
+    const text = await res.text();
+    const rows = parseCSV(text);
+    if(rows.length < 1) throw new Error('No data');
+
+    const headers = rows[0];
+    const dataRows = rows.slice(1).filter(r => r.some(c => c && c.trim() !== ''));
+
+    // find columns
+    const idxTimestamp = findColIndex(headers, ['timestamp','zeitstempel','date','time']);
+    const idxAge = findColIndex(headers, ['alter','age']);
+    const idxMig = findColIndex(headers, ['migrations','migration','migrationshintergrund','migration background','migrant']);
+    const idxGender = findColIndex(headers, ['geschlecht','gender','sex']);
+
+    // counters
+    const totals = {count: dataRows.length, gender: {}, age: {}, mig: {}};
+    const recent = [];
+    const times = {};
+
+    dataRows.forEach(r=>{
+      // timestamp
+      const tsRaw = idxTimestamp>=0 ? r[idxTimestamp] : '';
+      const ts = tsRaw ? new Date(tsRaw) : null;
+      const age = idxAge>=0 ? (r[idxAge]||'').trim() : '';
+      const mig = idxMig>=0 ? (r[idxMig]||'').trim() : '';
+      const gender = idxGender>=0 ? (r[idxGender]||'').trim() : '';
+
+      // normalize common labels
+      const gnorm = (gender||'').toLowerCase();
+      let gkey = 'Unbekannt';
+      if(gnorm.startsWith('männ') || gnorm === 'm' || gnorm.startsWith('male')) gkey='Männlich';
+      else if(gnorm.startsWith('w') || gnorm === 'f' || gnorm.startsWith('weib')) gkey='Weiblich';
+      else if(gnorm.startsWith('d') || gnorm.includes('div')) gkey='Divers';
+      else if(gnorm) gkey = (gender);
+
+      totals.gender[gkey] = (totals.gender[gkey]||0)+1;
+
+      // age normalize
+      let akey = 'Unbekannt';
+      if(age.match(/10/)) akey='10–14';
+      else if(age.match(/14/) || age.match(/15|16|17|18/)) akey='14–18';
+      else if(age.match(/18/) || age.match(/19|20|21|22|23|24|25|26|27/)) akey='18–27';
+      else if(age.match(/27|28|29|30|\+/) || age.match(/27\+/)) akey='27+';
+      else if(age) akey=age;
+      totals.age[akey] = (totals.age[akey]||0)+1;
+
+      // migration
+      let mkey = 'Unbekannt';
+      const mnorm = (mig||'').toLowerCase();
+      if(mnorm.startsWith('j') || mnorm.includes('yes') ) mkey='Ja';
+      else if(mnorm.startsWith('n') || mnorm.includes('no')) mkey='Nein';
+      totals.mig[mkey] = (totals.mig[mkey]||0)+1;
+
+      // recent list (keep timestamp or row text)
+      recent.push({ts: ts ? ts.toISOString() : '', age, mig, gender});
+
+      // timeseries by day
+      let day = ts ? ts.toISOString().slice(0,10) : 'unknown';
+      times[day] = (times[day]||0)+1;
+    });
+
+    // update DOM stats
+    document.getElementById('total').innerText = totals.count;
+
+    // recent entries
+    const recentEl = document.getElementById('recentList');
+    recentEl.innerHTML = '';
+    recent.slice(-6).reverse().forEach(e=>{
+      const line = document.createElement('div');
+      line.style.padding='6px 0';
+      line.style.borderBottom='1px solid #f1f5f9';
+      line.innerText = `${e.ts ? e.ts.replace('T',' ').slice(0,19) : ''} — ${e.age || '-'} / ${e.gender || '-'} / ${e.mig || '-'}`;
+      recentEl.appendChild(line);
+    });
+
+    // update charts
+    // gender
+    const gLabels = ['Männlich','Weiblich','Divers','Unbekannt'];
+    const gData = gLabels.map(l => totals.gender[l] || 0);
+    genderChart.data.labels = gLabels;
+    genderChart.data.datasets[0].data = gData;
+    genderChart.update();
+
+    // age
+    const aLabels = ['10–14','14–18','18–27','27+','Unbekannt'];
+    const aData = aLabels.map(l => totals.age[l] || 0);
+    ageChart.data.labels = aLabels;
+    ageChart.data.datasets[0].data = aData;
+    ageChart.update();
+
+    // migration
+    const mLabels = ['Ja','Nein','Unbekannt'];
+    const mData = mLabels.map(l => totals.mig[l] || 0);
+    migChart.data.labels = mLabels;
+    migChart.data.datasets[0].data = mData;
+    migChart.update();
+
+    // time series (sorted)
+    const days = Object.keys(times).sort();
+    timeChart.data.labels = days;
+    timeChart.data.datasets[0].data = days.map(d => times[d]);
+    timeChart.update();
+
+    // last update & fetch time
+    const took = Math.round((Date.now()-t0)/10)/100;
+    document.getElementById('lastUpdate').innerText = 'Letztes Laden: ' + new Date().toLocaleString();
+    document.getElementById('fetchStatus').innerText = 'OK ('+took+'s)';
+  }catch(err){
+    document.getElementById('fetchStatus').innerText = 'Fehler';
+    document.getElementById('lastUpdate').innerText = 'Fehler beim Laden: ' + (err.message||err);
+    console.error(err);
+  }
+}
+
+/* ====== init ====== */
+makeCharts();
+fetchAndUpdate();
+
+let refreshTimer = null;
+document.getElementById('refreshInterval').addEventListener('change', ()=>{
+  const v = Number(document.getElementById('refreshInterval').value);
+  if(refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  if(v > 0) refreshTimer = setInterval(fetchAndUpdate, v*1000);
+});
+
+// start interval if default selected (30s)
+const defaultV = Number(document.getElementById('refreshInterval').value);
+if(defaultV > 0) refreshTimer = setInterval(fetchAndUpdate, defaultV*1000);
+
+</script>
+</body>
+</html>
