@@ -2,6 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Büchsenstadel Besucherstatistik</title>
 
 <!-- Google Fonts -->
@@ -15,23 +16,25 @@
         display: flex;
         justify-content: center;
         align-items: center;
-        height: 100vh;
+        min-height: 100vh;
+        padding: 20px;
         color: #333;
     }
 
     .card {
         background: white;
-        padding: 30px 40px;
+        padding: 25px;
         border-radius: 16px;
         box-shadow: 0 4px 20px rgba(0,0,0,0.1);
         max-width: 400px;
-        width: 90%;
+        width: 100%;
     }
 
     h2 {
         text-align: center;
         margin-bottom: 25px;
         font-weight: 600;
+        font-size: 20px;
     }
 
     label {
@@ -43,10 +46,11 @@
     select {
         width: 100%;
         padding: 10px;
-        font-size: 14px;
+        font-size: 15px;
         border-radius: 8px;
         border: 1px solid #ccc;
         margin-bottom: 20px;
+        background: white;
     }
 
     button {
@@ -61,7 +65,12 @@
         transition: 0.2s;
     }
 
-    button:hover {
+    button:disabled {
+        background: #9bb6ff;
+        cursor: not-allowed;
+    }
+
+    button:hover:not(:disabled) {
         background: #3764d6;
     }
 
@@ -88,28 +97,34 @@
         target="hidden_iframe"
         onsubmit="submitted();">
 
+        <!-- ALTER -->
         <label for="alter">Alter:</label>
-        <select id="alter" name="entry.1790086809">
+        <select id="alter" name="entry.1790086809" required>
+            <option value="" disabled selected>Bitte auswählen…</option>
             <option value="10-14">10–14</option>
             <option value="14-18">14–18</option>
             <option value="18-27">18–27</option>
             <option value="27+">27+</option>
         </select>
 
+        <!-- MIGRATION -->
         <label for="migration">Migrationshintergrund:</label>
-        <select id="migration" name="entry.688049948">
+        <select id="migration" name="entry.688049948" required>
+            <option value="" disabled selected>Bitte auswählen…</option>
             <option value="Ja">Ja</option>
             <option value="Nein">Nein</option>
         </select>
 
+        <!-- GESCHLECHT -->
         <label for="geschlecht">Geschlecht:</label>
-        <select id="geschlecht" name="entry.1128434242">
+        <select id="geschlecht" name="entry.1128434242" required>
+            <option value="" disabled selected>Bitte auswählen…</option>
             <option value="Männlich">Männlich</option>
             <option value="Weiblich">Weiblich</option>
             <option value="Divers">Divers</option>
         </select>
 
-        <button type="submit">Absenden</button>
+        <button id="submitBtn" type="submit" disabled>Absenden</button>
     </form>
 
     <div id="thanks">Danke! Deine Eingabe wurde gespeichert.</div>
@@ -117,14 +132,21 @@
 
 <script>
 function submitted() {
-    const btn = document.querySelector("button[type='submit']");
+    const btn = document.getElementById("submitBtn");
     btn.disabled = true;
-    btn.innerText = "Gesendet";
+    btn.innerText = "Gesendet…";
     btn.style.opacity = "0.6";
-    btn.style.cursor = "not-allowed";
-
-    document.getElementById("thanks").style.display = "block";
 }
+
+const selects = document.querySelectorAll("select");
+const submitBtn = document.getElementById("submitBtn");
+
+selects.forEach(select => {
+    select.addEventListener("change", () => {
+        const allSelected = Array.from(selects).every(s => s.value !== "");
+        submitBtn.disabled = !allSelected;
+    });
+});
 </script>
 
 </body>
